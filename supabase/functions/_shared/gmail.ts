@@ -136,8 +136,9 @@ export async function createDraft(
     inReplyTo ? `In-Reply-To: ${inReplyTo}` : '',
   ].filter(Boolean).join('\r\n')
 
-  const raw     = btoa(`${headers}\r\n\r\n${body}`)
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const raw = btoa(
+    String.fromCharCode(...new TextEncoder().encode(`${headers}\r\n\r\n${body}`))
+  ).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 
   const draftBody: Record<string, unknown> = { message: { raw } }
   if (threadId) draftBody.message = { ...draftBody.message as object, threadId }
