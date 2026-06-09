@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { chatComplete }                          from '../_shared/openai.ts'
-import { fetchUnreadEmails, fetchThreadContext, createDraft, GmailMessage } from '../_shared/gmail.ts'
+import { fetchUnreadEmails, fetchThreadContext, createDraft, markAsRead, GmailMessage } from '../_shared/gmail.ts'
 import { sendTelegram }                          from '../_shared/utils.ts'
 
 const TELEGRAM_TOKEN  = Deno.env.get('TELEGRAM_BOT_TOKEN')!
@@ -8,7 +8,7 @@ const ALLOWED_CHAT_ID = Number(Deno.env.get('ALLOWED_CHAT_ID')!)
 const SUPABASE_URL    = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_KEY    = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { db: { schema: 'email_drafts' } })
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 
 // ── Prompts (mirrors the make.com blueprint logic) ────────────────────────────
 
@@ -49,7 +49,7 @@ ${context}`
 
 async function isProcessed(messageId: string): Promise<boolean> {
   const { data } = await supabase
-    .from('processed_emails')
+    .from('email_drafts_processed_emails')
     .select('message_id')
     .eq('message_id', messageId)
     .single()
@@ -57,7 +57,7 @@ async function isProcessed(messageId: string): Promise<boolean> {
 }
 
 async function markProcessed(messageId: string, draftId: string | null, status: string): Promise<void> {
-  await supabase.from('processed_emails').insert({
+  await supabase.from('email_drafts_processed_emails').insert({
     message_id: messageId,
     draft_id:   draftId,
     status,
@@ -107,8 +107,9 @@ async function processEmail(email: GmailMessage): Promise<void> {
     return
   }
 
-  // Step 3: create Gmail draft
+  // Step 3: create Gmail draft and mark original as read
   const draftId = await createDraft(email.from, email.subject, finalDraft, undefined, email.threadId)
+  await markAsRead(email.id)
   await markProcessed(email.id, draftId, 'ok')
 
   // Step 4: notify via Telegram

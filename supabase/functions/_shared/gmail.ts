@@ -104,6 +104,15 @@ export async function fetchUnreadEmails(maxResults = 10): Promise<GmailMessage[]
   return messages
 }
 
+export async function markAsRead(messageId: string): Promise<void> {
+  const token = await getAccessToken()
+  await fetch(`${GMAIL_API_BASE}/messages/${messageId}/modify`, {
+    method:  'POST',
+    headers: gmailHeaders(token),
+    body:    JSON.stringify({ removeLabelIds: ['UNREAD'] }),
+  })
+}
+
 export async function fetchThreadContext(threadId: string, maxMessages = 2): Promise<string> {
   const token   = await getAccessToken()
   const res     = await fetch(`${GMAIL_API_BASE}/threads/${threadId}?format=full`, { headers: gmailHeaders(token) })
