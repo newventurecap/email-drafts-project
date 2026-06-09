@@ -8,7 +8,7 @@ const ALLOWED_CHAT_ID = Number(Deno.env.get('ALLOWED_CHAT_ID')!)
 const SUPABASE_URL    = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_KEY    = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { db: { schema: 'email_drafts' } })
 
 // ── Prompts (mirrors the make.com blueprint logic) ────────────────────────────
 
