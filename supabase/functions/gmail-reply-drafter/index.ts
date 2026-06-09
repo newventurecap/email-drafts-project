@@ -12,19 +12,25 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 
 // ── Prompts (mirrors the make.com blueprint logic) ────────────────────────────
 
-const CLASSIFY_PROMPT = (email: GmailMessage) => `You are drafting email replies.
+const CLASSIFY_PROMPT = (email: GmailMessage) => `You are drafting email replies for a professional.
 
-Given this inbound email, decide whether you need extra context (prior thread messages) to draft a correct reply.
+Decide whether this email needs a reply, and if so, draft one.
 
 Output EXACTLY in this format:
+ACTION: reply|skip
 NEED_CONTEXT: yes|no
 DRAFT:
-<professional reply draft>
+<professional reply draft, or leave blank if ACTION is skip>
 
-Rules:
-- If the email is clearly a direct question/request and can be answered without prior context, use NEED_CONTEXT: no.
-- If it references prior decisions, attachments you can't see, earlier promises, or ambiguous details, use NEED_CONTEXT: yes.
-- Keep the draft concise, professional, and ready to send.
+Rules for ACTION:
+- skip: newsletters, marketing, automated notifications, receipts, alerts, job boards, social/digest emails, anything where a human reply would be odd or unwanted.
+- reply: direct emails from real people asking questions, making requests, scheduling, following up, or expecting a response.
+
+Rules for NEED_CONTEXT (only matters if ACTION is reply):
+- no: the email can be answered without seeing prior messages.
+- yes: the email references prior decisions, earlier promises, or ambiguous context that requires seeing the thread.
+
+Keep drafts concise, professional, and ready to send.
 
 INBOUND EMAIL
 From: ${email.from}
@@ -67,18 +73,20 @@ async function markProcessed(messageId: string, draftId: string | null, status: 
 
 // ── Parse classify response ───────────────────────────────────────────────────
 
-function parseClassify(text: string): { needContext: boolean; draft: string } {
-  const lines      = text.split('\n')
+function parseClassify(text: string): { skip: boolean; needContext: boolean; draft: string } {
+  const lines       = text.split('\n')
+  const actionLine  = lines.find(l => l.startsWith('ACTION:')) ?? ''
+  const skip        = actionLine.toLowerCase().includes('skip')
   const contextLine = lines.find(l => l.startsWith('NEED_CONTEXT:')) ?? ''
   const needContext = contextLine.toLowerCase().includes('yes')
-  const draftStart = lines.findIndex(l => l.startsWith('DRAFT:'))
-  const draft      = draftStart >= 0 ? lines.slice(draftStart + 1).join('\n').trim() : ''
-  return { needContext, draft }
+  const draftStart  = lines.findIndex(l => l.startsWith('DRAFT:'))
+  const draft       = draftStart >= 0 ? lines.slice(draftStart + 1).join('\n').trim() : ''
+  return { skip, needContext, draft }
 }
 
 // ── Process a single email ────────────────────────────────────────────────────
 
-async function processEmail(email: GmailMessage): Promise<void> {
+async function processEmail(email: GmailMessage): Promise<string> {
   console.log(`Processing: ${email.id} — ${email.subject}`)
 
   // Step 1: classify + draft in one call
@@ -86,7 +94,13 @@ async function processEmail(email: GmailMessage): Promise<void> {
     [{ role: 'user', content: CLASSIFY_PROMPT(email) }],
     500,
   )
-  const { needContext, draft: initialDraft } = parseClassify(classifyText)
+  const { skip, needContext, draft: initialDraft } = parseClassify(classifyText)
+
+  if (skip) {
+    console.log(`Skipping (no reply needed): ${email.id}`)
+    await markProcessed(email.id, null, 'skipped:no_reply_needed')
+    return 'skipped:no_reply_needed'
+  }
 
   let finalDraft = initialDraft
 
@@ -104,7 +118,7 @@ async function processEmail(email: GmailMessage): Promise<void> {
   if (!finalDraft) {
     console.error(`Empty draft for ${email.id}, skipping`)
     await markProcessed(email.id, null, 'error:empty_draft')
-    return
+    return 'error:empty_draft'
   }
 
   // Step 3: create Gmail draft as a threaded reply with quoted original
@@ -125,6 +139,7 @@ async function processEmail(email: GmailMessage): Promise<void> {
     `Draft created\nFrom: ${email.from}\nSubject: ${email.subject}\n\nPreview: ${snippet}${finalDraft.length > 150 ? '...' : ''}`,
   )
   console.log(`Done: ${email.id} → draft ${draftId}`)
+  return 'ok'
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
@@ -159,8 +174,8 @@ Deno.serve(async (req) => {
         continue
       }
       try {
-        await processEmail(email)
-        results.push({ id: email.id, status: 'ok' })
+        const status = await processEmail(email)
+        results.push({ id: email.id, status })
       } catch (err) {
         console.error(`Error processing ${email.id}:`, err)
         await markProcessed(email.id, null, `error:${String(err).slice(0, 100)}`)
