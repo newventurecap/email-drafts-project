@@ -129,16 +129,31 @@ export async function createDraft(
 ): Promise<string> {
   const token = await getAccessToken()
 
+  // Safe base64 that handles Unicode and avoids spread-operator stack overflow on large strings
+  function toBase64Url(str: string): string {
+    const bytes = new TextEncoder().encode(str)
+    let binary  = ''
+    for (const b of bytes) binary += String.fromCharCode(b)
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  }
+
+  // RFC 2047 encode header values that contain non-ASCII characters
+  function encodeHeader(value: string): string {
+    if (/^[\x00-\x7F]*$/.test(value)) return value
+    const bytes = new TextEncoder().encode(value)
+    let binary  = ''
+    for (const b of bytes) binary += String.fromCharCode(b)
+    return `=?UTF-8?B?${btoa(binary)}?=`
+  }
+
   const subjectLine = subject.startsWith('Re:') ? subject : `Re: ${subject}`
   const headers     = [
     `To: ${to}`,
-    `Subject: ${subjectLine}`,
+    `Subject: ${encodeHeader(subjectLine)}`,
     inReplyTo ? `In-Reply-To: ${inReplyTo}` : '',
   ].filter(Boolean).join('\r\n')
 
-  const raw = btoa(
-    String.fromCharCode(...new TextEncoder().encode(`${headers}\r\n\r\n${body}`))
-  ).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const raw = toBase64Url(`${headers}\r\n\r\n${body}`)
 
   const draftBody: Record<string, unknown> = { message: { raw } }
   if (threadId) draftBody.message = { ...draftBody.message as object, threadId }
