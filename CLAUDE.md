@@ -32,9 +32,27 @@ All tables live in the **`email_drafts` schema** — never in `public` — so th
 The edge function connects with `{ db: { schema: 'email_drafts' } }` so all `supabase.from()` calls target that schema automatically.
 
 ## Auto-polling
-A `pg_cron` job (`email-drafts-poll`) fires every 15 minutes and calls the edge function via `pg_net`. To change frequency, update the cron expression in `20240102000000_schema_and_cron.sql` and re-run the migration.
+A `pg_cron` job (`email-drafts-poll`) fires every 15 minutes and calls the edge function via `pg_net`. The cron job is already live in the database.
 
-To check or cancel the cron job in Postgres:
+To set it up fresh on a new Supabase project, run this in the SQL editor (substitute your real service role key):
+```sql
+select cron.schedule(
+  'email-drafts-poll',
+  '*/15 * * * *',
+  $$
+  select net.http_post(
+    url     := 'https://wuffujljaklxumkdeaeu.supabase.co/functions/v1/gmail-reply-drafter',
+    headers := jsonb_build_object(
+      'Authorization', 'Bearer <SUPABASE_SERVICE_ROLE_KEY>',
+      'Content-Type',  'application/json'
+    ),
+    body    := '{}'::jsonb
+  );
+  $$
+);
+```
+
+To check or cancel the cron job:
 ```sql
 -- list jobs
 select * from cron.job;
