@@ -36,13 +36,14 @@ function gmailHeaders(token: string): Record<string, string> {
 }
 
 export type GmailMessage = {
-  id:       string
-  threadId: string
-  from:     string
-  subject:  string
-  body:     string
-  snippet:  string
-  date:     string
+  id:        string
+  threadId:  string
+  messageId: string  // value of the Message-ID header, used for In-Reply-To threading
+  from:      string
+  subject:   string
+  body:      string
+  snippet:   string
+  date:      string
 }
 
 function decodeBase64Url(str: string): string {
@@ -55,7 +56,6 @@ function decodeBase64Url(str: string): string {
 }
 
 function extractBody(payload: Record<string, unknown>): string {
-  // Try plain text part first
   const parts = payload.parts as Record<string, unknown>[] | undefined
   if (parts) {
     for (const part of parts) {
@@ -64,7 +64,6 @@ function extractBody(payload: Record<string, unknown>): string {
         if (data) return decodeBase64Url(data)
       }
     }
-    // Fallback to first part
     const data = (parts[0]?.body as Record<string, unknown>)?.data as string
     if (data) return decodeBase64Url(data)
   }
@@ -91,26 +90,33 @@ export async function fetchUnreadEmails(maxResults = 10): Promise<GmailMessage[]
       const full = await res.json()
       const hdrs = (full.payload?.headers ?? []) as { name: string; value: string }[]
       return {
-        id:       full.id,
-        threadId: full.threadId,
-        from:     headerVal(hdrs, 'From'),
-        subject:  headerVal(hdrs, 'Subject'),
-        body:     extractBody(full.payload ?? {}),
-        snippet:  full.snippet ?? '',
-        date:     headerVal(hdrs, 'Date'),
+        id:        full.id,
+        threadId:  full.threadId,
+        messageId: headerVal(hdrs, 'Message-ID'),
+        from:      headerVal(hdrs, 'From'),
+        subject:   headerVal(hdrs, 'Subject'),
+        body:      extractBody(full.payload ?? {}),
+        snippet:   full.snippet ?? '',
+        date:      headerVal(hdrs, 'Date'),
       }
     }),
   )
   return messages
 }
 
-export async function markAsRead(messageId: string): Promise<void> {
+// Returns true if the user has already manually replied to this email in the thread
+export async function hasBeenReplied(email: GmailMessage): Promise<boolean> {
   const token = await getAccessToken()
-  await fetch(`${GMAIL_API_BASE}/messages/${messageId}/modify`, {
-    method:  'POST',
-    headers: gmailHeaders(token),
-    body:    JSON.stringify({ removeLabelIds: ['UNREAD'] }),
-  })
+  const res   = await fetch(
+    `${GMAIL_API_BASE}/threads/${email.threadId}?format=metadata`,
+    { headers: gmailHeaders(token) },
+  )
+  const thread = await res.json()
+  const msgs   = (thread.messages ?? []) as { id: string; labelIds: string[] }[]
+  const idx    = msgs.findIndex(m => m.id === email.id)
+  if (idx === -1) return false
+  // Any SENT message appearing after this one in the thread means the user already replied
+  return msgs.slice(idx + 1).some(m => m.labelIds?.includes('SENT'))
 }
 
 export async function fetchThreadContext(threadId: string, maxMessages = 2): Promise<string> {
@@ -118,7 +124,6 @@ export async function fetchThreadContext(threadId: string, maxMessages = 2): Pro
   const res     = await fetch(`${GMAIL_API_BASE}/threads/${threadId}?format=full`, { headers: gmailHeaders(token) })
   const thread  = await res.json()
   const msgs    = (thread.messages ?? []) as Record<string, unknown>[]
-  // Take up to maxMessages prior messages (excluding the latest)
   const context = msgs.slice(0, -1).slice(-maxMessages)
   return context.map(m => {
     const hdrs    = (m.payload as Record<string, unknown>)?.headers as { name: string; value: string }[] ?? []
@@ -130,15 +135,14 @@ export async function fetchThreadContext(threadId: string, maxMessages = 2): Pro
 }
 
 export async function createDraft(
-  to:      string,
-  subject: string,
-  body:    string,
-  inReplyTo?: string,
-  threadId?:  string,
+  to:        string,
+  subject:   string,
+  body:      string,
+  original:  { messageId: string; from: string; date: string; body: string } | undefined,
+  threadId?: string,
 ): Promise<string> {
   const token = await getAccessToken()
 
-  // Safe base64 that handles Unicode and avoids spread-operator stack overflow on large strings
   function toBase64Url(str: string): string {
     const bytes = new TextEncoder().encode(str)
     let binary  = ''
@@ -146,7 +150,6 @@ export async function createDraft(
     return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
   }
 
-  // RFC 2047 encode header values that contain non-ASCII characters
   function encodeHeader(value: string): string {
     if (/^[\x00-\x7F]*$/.test(value)) return value
     const bytes = new TextEncoder().encode(value)
@@ -159,10 +162,17 @@ export async function createDraft(
   const headers     = [
     `To: ${to}`,
     `Subject: ${encodeHeader(subjectLine)}`,
-    inReplyTo ? `In-Reply-To: ${inReplyTo}` : '',
+    original?.messageId ? `In-Reply-To: ${original.messageId}` : '',
+    original?.messageId ? `References: ${original.messageId}` : '',
   ].filter(Boolean).join('\r\n')
 
-  const raw = toBase64Url(`${headers}\r\n\r\n${body}`)
+  // Quote the original email below the reply
+  const quotedOriginal = original
+    ? `\n\nOn ${original.date}, ${original.from} wrote:\n` +
+      (original.body || '').split('\n').map(l => `> ${l}`).join('\n')
+    : ''
+
+  const raw = toBase64Url(`${headers}\r\n\r\n${body}${quotedOriginal}`)
 
   const draftBody: Record<string, unknown> = { message: { raw } }
   if (threadId) draftBody.message = { ...draftBody.message as object, threadId }

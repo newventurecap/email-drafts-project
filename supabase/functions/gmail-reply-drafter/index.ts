@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { chatComplete }                          from '../_shared/openai.ts'
-import { fetchUnreadEmails, fetchThreadContext, createDraft, GmailMessage } from '../_shared/gmail.ts'
+import { fetchUnreadEmails, fetchThreadContext, createDraft, hasBeenReplied, GmailMessage } from '../_shared/gmail.ts'
 import { sendTelegram }                          from '../_shared/utils.ts'
 
 const TELEGRAM_TOKEN  = Deno.env.get('TELEGRAM_BOT_TOKEN')!
@@ -107,8 +107,14 @@ async function processEmail(email: GmailMessage): Promise<void> {
     return
   }
 
-  // Step 3: create Gmail draft
-  const draftId = await createDraft(email.from, email.subject, finalDraft, undefined, email.threadId)
+  // Step 3: create Gmail draft as a threaded reply with quoted original
+  const draftId = await createDraft(
+    email.from,
+    email.subject,
+    finalDraft,
+    { messageId: email.messageId, from: email.from, date: email.date, body: email.body || email.snippet },
+    email.threadId,
+  )
   await markProcessed(email.id, draftId, 'ok')
 
   // Step 4: notify via Telegram
@@ -144,6 +150,12 @@ Deno.serve(async (req) => {
       if (await isProcessed(email.id)) {
         console.log(`Already processed: ${email.id}`)
         results.push({ id: email.id, status: 'skipped' })
+        continue
+      }
+      if (await hasBeenReplied(email)) {
+        console.log(`Already replied: ${email.id}`)
+        await markProcessed(email.id, null, 'skipped:replied')
+        results.push({ id: email.id, status: 'skipped:replied' })
         continue
       }
       try {
