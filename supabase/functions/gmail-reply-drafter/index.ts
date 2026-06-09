@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { chatComplete }                          from '../_shared/openai.ts'
-import { fetchUnreadEmails, fetchThreadContext, createDraft, markAsRead, GmailMessage } from '../_shared/gmail.ts'
+import { fetchUnreadEmails, fetchThreadContext, createDraft, GmailMessage } from '../_shared/gmail.ts'
 import { sendTelegram }                          from '../_shared/utils.ts'
 
 const TELEGRAM_TOKEN  = Deno.env.get('TELEGRAM_BOT_TOKEN')!
@@ -107,9 +107,8 @@ async function processEmail(email: GmailMessage): Promise<void> {
     return
   }
 
-  // Step 3: create Gmail draft and mark original as read
+  // Step 3: create Gmail draft
   const draftId = await createDraft(email.from, email.subject, finalDraft, undefined, email.threadId)
-  await markAsRead(email.id)
   await markProcessed(email.id, draftId, 'ok')
 
   // Step 4: notify via Telegram

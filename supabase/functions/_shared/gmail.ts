@@ -79,7 +79,7 @@ function headerVal(headers: { name: string; value: string }[], name: string): st
 export async function fetchUnreadEmails(maxResults = 10): Promise<GmailMessage[]> {
   const token = await getAccessToken()
   const listRes = await fetch(
-    `${GMAIL_API_BASE}/messages?q=is:unread in:inbox&maxResults=${maxResults}`,
+    `${GMAIL_API_BASE}/messages?q=in:inbox newer_than:1d&maxResults=${maxResults}`,
     { headers: gmailHeaders(token) },
   )
   const listJson = await listRes.json()
