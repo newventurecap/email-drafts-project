@@ -58,14 +58,20 @@ function decodeBase64Url(str: string): string {
 function extractBody(payload: Record<string, unknown>): string {
   const parts = payload.parts as Record<string, unknown>[] | undefined
   if (parts) {
+    // First pass: look for text/plain at this level
     for (const part of parts) {
       if (part.mimeType === 'text/plain') {
         const data = (part.body as Record<string, unknown>)?.data as string
         if (data) return decodeBase64Url(data)
       }
     }
-    const data = (parts[0]?.body as Record<string, unknown>)?.data as string
-    if (data) return decodeBase64Url(data)
+    // Second pass: recurse into nested multiparts (handles multipart/mixed → multipart/alternative → text/plain)
+    for (const part of parts) {
+      if ((part.mimeType as string)?.startsWith('multipart/')) {
+        const body = extractBody(part)
+        if (body) return body
+      }
+    }
   }
   const data = (payload.body as Record<string, unknown>)?.data as string
   return data ? decodeBase64Url(data) : ''
